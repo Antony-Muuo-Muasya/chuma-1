@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect, Suspense, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
@@ -115,6 +114,15 @@ const CURRENCY = "USD";
 // For this demo environment, keep it false unless you are running the node server
 const USE_BACKEND_VERIFICATION = true; 
 const BACKEND_URL = "http://localhost:8888";
+
+// --- PAYPAL OPTIONS (Must be outside component to prevent reloads) ---
+const initialPayPalOptions = {
+    "client-id": PAYPAL_CLIENT_ID,
+    currency: CURRENCY,
+    intent: "capture",
+    components: "buttons", 
+    "enable-funding": "venmo,paylater,card"
+};
 
 // --- CONSTANTS & DATA ---
 
@@ -458,8 +466,8 @@ const PayPalCheckoutModal = ({ isOpen, onClose, cart, total, onSuccess }) => {
                   forceReRender={[total, CURRENCY]}
                   createOrder={async (data, actions) => {
                     setError(null); // Clear previous errors
-                    if (USE_BACKEND_VERIFICATION) {
-                        try {
+                    try {
+                        if (USE_BACKEND_VERIFICATION) {
                             const response = await fetch(`${BACKEND_URL}/api/orders`, {
                                 method: "POST",
                                 headers: { "Content-Type": "application/json" },
@@ -485,23 +493,24 @@ const PayPalCheckoutModal = ({ isOpen, onClose, cart, total, onSuccess }) => {
                               : (orderData.message || "Failed to create order");
                             
                             throw new Error(errorMessage);
-
-                        } catch (err: any) {
-                            console.error("Backend Create Error:", err);
-                            // Do not throw object, throw string message
-                            throw new Error(err.message || "Failed to initiate payment");
+                        } else {
+                            // CLIENT-SIDE FALLBACK
+                            return actions.order.create({
+                              purchase_units: [{
+                                amount: {
+                                  value: total.toString(),
+                                  currency_code: CURRENCY
+                                },
+                                description: "CHUMA Merch Order"
+                              }]
+                            });
                         }
-                    } else {
-                        // CLIENT-SIDE FALLBACK
-                        return actions.order.create({
-                          purchase_units: [{
-                            amount: {
-                              value: total.toString(),
-                              currency_code: CURRENCY
-                            },
-                            description: "CHUMA Merch Order"
-                          }]
-                        });
+                    } catch (err: any) {
+                        console.error("Create Order Error:", err);
+                        // Do not throw object, throw string message
+                        const msg = err.message || "Failed to initiate payment";
+                        setError(msg);
+                        throw new Error(msg);
                     }
                   }}
                   onApprove={async (data, actions) => {
@@ -543,6 +552,11 @@ const PayPalCheckoutModal = ({ isOpen, onClose, cart, total, onSuccess }) => {
                     let msg = "An unexpected error occurred with PayPal.";
                     if (typeof err === 'string') msg = err;
                     if (err?.message) msg = err.message;
+                    if (typeof err === 'object' && !err.message) {
+                        try {
+                            msg = JSON.stringify(err);
+                        } catch(e) { /* ignore */ }
+                    }
                     setError(msg);
                   }}
                   onCancel={() => {
@@ -1467,8 +1481,11 @@ const AuthModal = ({ isOpen, onClose }) => {
            setError("Password must be at least 6 characters.");
          } else {
            console.error(error);
-           // Safely extract error message
-           setError(error.message || "Registration failed. Try again.");
+           // Safely extract error message and clean it up
+           const rawMsg = error.message || "Registration failed. Try again.";
+           // Remove "Firebase: " and error code suffix like "(auth/weak-password)"
+           const cleanMsg = rawMsg.replace('Firebase: ', '').replace(/\(auth\/.*\)\.?/, '').trim();
+           setError(cleanMsg);
          }
        }
     } else {
@@ -1498,10 +1515,10 @@ const AuthModal = ({ isOpen, onClose }) => {
 
                 {error && (
                     <div className="mb-4 p-3 bg-red-900/30 border border-red-500/50 rounded flex items-center gap-2 text-red-200 text-xs">
-                        <AlertTriangle size={14} className="text-red-500" />
-                        {error}
+                        <AlertTriangle size={14} className="text-red-500 shrink-0" />
+                        <span className="break-words">{error}</span>
                         {error === "User already exists. Sign in?" && (
-                            <button onClick={() => { setMode('login'); setError(''); }} className="ml-auto underline font-bold">Sign In</button>
+                            <button onClick={() => { setMode('login'); setError(''); }} className="ml-auto underline font-bold shrink-0">Sign In</button>
                         )}
                     </div>
                 )}
@@ -2253,16 +2270,6 @@ function App() {
       } catch (e) {
           console.error(e);
       }
-  };
-
-  // --- CONFIG FOR PAYPAL ---
-  // Ensuring correct option naming for SDK wrapper
-  const initialPayPalOptions = {
-    "client-id": PAYPAL_CLIENT_ID,
-    currency: CURRENCY,
-    intent: "capture",
-    components: "buttons", 
-    "enable-funding": "venmo,paylater,card" // Ensure card button renders
   };
 
   return (
