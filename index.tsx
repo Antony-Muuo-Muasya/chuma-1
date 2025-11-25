@@ -1573,8 +1573,8 @@ const HeroContent = ({ onExplore, onGoToStore, tracks, wallImages, isAdmin, onWa
       <VideoModal isOpen={showVideo} onClose={() => setShowVideo(false)} />
       <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-end pb-[15vh] z-10 px-6 md:px-12">
         <div className="absolute bottom-[25vh] md:bottom-[25vh] left-1/2 -translate-x-1/2 flex flex-col items-center gap-4 z-20 pointer-events-auto w-full px-4">
-            <button onClick={onExplore} className="px-6 py-3 md:px-8 bg-[var(--theme-color)] text-black font-bold font-brand tracking-widest hover:bg-white transition-colors clip-path-slant w-full max-w-xs md:w-auto" style={{ clipPath: 'polygon(10% 0, 100% 0, 90% 100%, 0% 100%)' }}>STREAM NOW</button>
-            <h2 className="text-xs md:text-sm font-light tracking-[0.8em] text-[var(--theme-color)] animate-pulse pointer-events-none whitespace-nowrap">THE SOUND OF THE FUTURE</h2>
+            <button onClick={onExplore} className="px-5 py-2 md:px-8 md:py-3 bg-[var(--theme-color)] text-black font-bold font-brand tracking-widest hover:bg-white transition-colors clip-path-slant w-auto text-sm md:text-base shadow-[0_0_15px_rgba(var(--theme-rgb),0.4)] hover:shadow-[0_0_25px_rgba(var(--theme-rgb),0.6)]" style={{ clipPath: 'polygon(10% 0, 100% 0, 90% 100%, 0% 100%)' }}>STREAM NOW</button>
+            <h2 className="text-[10px] md:text-sm font-light tracking-[0.8em] text-[var(--theme-color)] animate-pulse pointer-events-none whitespace-nowrap">THE SOUND OF THE FUTURE</h2>
         </div>
         <div className="w-full flex justify-center md:justify-end items-end">
            <div className="pointer-events-auto w-full max-w-xs md:w-auto text-center md:text-right">
