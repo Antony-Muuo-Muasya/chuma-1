@@ -73,7 +73,6 @@ import {
   Upload
 } from 'lucide-react';
 import * as THREE from 'three';
-import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
 
 // --- FIREBASE IMPORTS ---
 import { initializeApp } from "firebase/app";
@@ -106,23 +105,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const analyticsPromise = isSupported().then(yes => yes ? getAnalytics(app) : null);
-
-// --- PAYPAL CONFIG ---
-const PAYPAL_CLIENT_ID = "Ae7qJ8qRVcs7Sc2jE_sRPWuCbjL-68HqmL1KkRY1Lt_kRQotx-RyRvt_Nhwedc2RGHzCXkUBYRjefWYT";
-const CURRENCY = "USD";
-// To connect to the Node.js backend created in server.js, set this to true for better security
-// For this demo environment, keep it false unless you are running the node server
-const USE_BACKEND_VERIFICATION = true; 
-const BACKEND_URL = "http://localhost:8888";
-
-// --- PAYPAL OPTIONS (Must be outside component to prevent reloads) ---
-const initialPayPalOptions = {
-    "client-id": PAYPAL_CLIENT_ID,
-    currency: CURRENCY,
-    intent: "capture",
-    components: "buttons", 
-    "enable-funding": "venmo,paylater,card"
-};
 
 // --- CONSTANTS & DATA ---
 
@@ -405,179 +387,7 @@ const CustomCursor = () => {
   );
 };
 
-// --- PAYPAL CHECKOUT COMPONENTS ---
-
-const PayPalCheckoutModal = ({ isOpen, onClose, cart, total, onSuccess }) => {
-  const [error, setError] = useState<string | null>(null);
-
-  // If not open, do not render to avoid background processing
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/95 backdrop-blur-xl p-4">
-      <div className="absolute inset-0" onClick={onClose} />
-      
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.9, y: 20 }} 
-        animate={{ opacity: 1, scale: 1, y: 0 }} 
-        className="relative w-full max-w-md bg-[#0a0a0a] border border-[var(--theme-color)]/30 rounded-2xl overflow-hidden shadow-[0_0_50px_rgba(var(--theme-rgb),0.15)] flex flex-col pointer-events-auto"
-      >
-        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[var(--theme-color)] to-transparent" />
-        <button onClick={onClose} className="absolute top-4 right-4 text-gray-500 hover:text-white transition-colors z-10">
-          <X size={24} />
-        </button>
-
-        <div className="p-8 pb-4 text-center">
-          <h2 className="text-2xl font-brand font-bold text-white mb-1 tracking-widest">SECURE CHECKOUT</h2>
-          <p className="text-xs text-gray-400 mb-6 font-mono">COMPLETE YOUR ORDER - {CURRENCY} {total}</p>
-          
-          <div className="bg-white/5 rounded-lg p-4 mb-6 border border-white/5">
-             <div className="flex justify-between items-center mb-2">
-                <span className="text-xs text-gray-400">ITEMS</span>
-                <span className="text-xs font-bold">{cart.length}</span>
-             </div>
-             <div className="flex justify-between items-center">
-                <span className="text-xs text-gray-400">TOTAL</span>
-                <span className="text-xl font-brand text-[var(--theme-color)]">${total}</span>
-             </div>
-          </div>
-        </div>
-
-        <div className="px-8 pb-8 flex-1 overflow-y-auto">
-          {error && (
-            <div className="mb-4 p-3 bg-red-900/20 border border-red-500/30 rounded text-red-400 text-xs flex items-center gap-2">
-              <AlertTriangle size={14} /> {error}
-            </div>
-          )}
-
-          <div className="z-0 relative w-full min-h-[150px]">
-             {/* 
-                 WRAPPER DIV: Ensures the buttons have a place to live even if network is slow.
-                 key={total} forces re-render if amount changes.
-             */}
-             <div key={total} className="relative z-0">
-               <PayPalButtons
-                  style={{ 
-                    layout: "vertical",
-                    shape: "rect",
-                    color: "gold",
-                    height: 44
-                  }}
-                  forceReRender={[total, CURRENCY]}
-                  createOrder={async (data, actions) => {
-                    setError(null); // Clear previous errors
-                    try {
-                        if (USE_BACKEND_VERIFICATION) {
-                            const response = await fetch(`${BACKEND_URL}/api/orders`, {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ cart, amount: total.toString(), currency: CURRENCY }) // ensure amount is string
-                            });
-                            
-                            // Check if response is JSON
-                            const contentType = response.headers.get("content-type");
-                            if (!contentType || !contentType.includes("application/json")) {
-                                throw new Error("Server returned non-JSON response");
-                            }
-
-                            const orderData = await response.json();
-                            
-                            if (response.ok && orderData.id) {
-                                return orderData.id;
-                            }
-                            
-                            // Safely extract error message
-                            const errorDetail = orderData?.details?.[0];
-                            const errorMessage = errorDetail
-                              ? `${errorDetail.issue} ${errorDetail.description} (${orderData.debug_id})`
-                              : (orderData.message || "Failed to create order");
-                            
-                            throw new Error(errorMessage);
-                        } else {
-                            // CLIENT-SIDE FALLBACK
-                            return actions.order.create({
-                              purchase_units: [{
-                                amount: {
-                                  value: total.toString(),
-                                  currency_code: CURRENCY
-                                },
-                                description: "CHUMA Merch Order"
-                              }]
-                            });
-                        }
-                    } catch (err: any) {
-                        console.error("Create Order Error:", err);
-                        // Do not throw object, throw string message
-                        const msg = err.message || "Failed to initiate payment";
-                        setError(msg);
-                        throw new Error(msg);
-                    }
-                  }}
-                  onApprove={async (data, actions) => {
-                    try {
-                      if (USE_BACKEND_VERIFICATION) {
-                          const response = await fetch(`${BACKEND_URL}/api/orders/${data.orderID}/capture`, {
-                              method: "POST"
-                          });
-                          
-                          const contentType = response.headers.get("content-type");
-                          if (!contentType || !contentType.includes("application/json")) {
-                             throw new Error("Server returned non-JSON response during capture");
-                          }
-
-                          const orderData = await response.json();
-                          const errorDetail = orderData?.details?.[0];
-                          
-                          if (errorDetail?.issue === 'INSTRUMENT_DECLINED') {
-                              return actions.restart();
-                          } else if (errorDetail || (orderData.status && orderData.status !== 'COMPLETED')) {
-                               const errorMsg = errorDetail ? errorDetail.description : "Transaction not completed";
-                               throw new Error(errorMsg);
-                          }
-                          
-                          onSuccess(orderData);
-                      } else {
-                          const details = await actions.order.capture();
-                          onSuccess(details);
-                      }
-                    } catch (err: any) {
-                      console.error("Capture Error:", err);
-                      setError(err.message || "Transaction failed. Please try again.");
-                    }
-                  }}
-                  onError={(err: any) => {
-                    // Prevent [object Object] alert by logging and setting friendly message
-                    console.error("PayPal SDK Error:", err);
-                    // Check if err is an object and has message
-                    let msg = "An unexpected error occurred with PayPal.";
-                    if (typeof err === 'string') msg = err;
-                    if (err?.message) msg = err.message;
-                    if (typeof err === 'object' && !err.message) {
-                        try {
-                            msg = JSON.stringify(err);
-                        } catch(e) { /* ignore */ }
-                    }
-                    setError(msg);
-                  }}
-                  onCancel={() => {
-                     console.log("User cancelled");
-                  }}
-               />
-             </div>
-          </div>
-          <p className="text-[10px] text-gray-600 text-center mt-4">
-             Processed securely by PayPal. Supports Visa, Mastercard, Amex.
-          </p>
-        </div>
-      </motion.div>
-    </div>
-  );
-};
-
-// ... (Rest of existing components: ReactiveFloor, NavHologram, AbstractAvatar, etc.) ...
-// Keep all standard UI components as they were, only updating AuthModal and ensuring App wraps properly
-
-// ... [Truncated for brevity, assuming standard components like ReactiveFloor, NavHologram, etc. exist] ...
+// --- 3D COMPONENTS ---
 const ReactiveFloor = ({ vibe, matrixMode, themeColor }) => {
   const meshRef = useRef<THREE.Mesh>(null);
   
@@ -611,7 +421,7 @@ const ReactiveFloor = ({ vibe, matrixMode, themeColor }) => {
     </group>
   );
 };
-// ... Other 3D components ...
+
 const NavHologram = ({ hoveredNav, matrixMode, themeColor }) => {
   const meshRef = useRef<THREE.Mesh>(null);
   useFrame((state) => {
@@ -907,7 +717,6 @@ const MouseTrail = ({ themeColor }) => {
   );
 };
 
-// ... Gallery components ... 
 const Gallery3DItem: React.FC<{ 
   img: any, 
   position: any, 
@@ -1110,7 +919,6 @@ const Gallery3D = ({ images, themeColor }: { images: any[], themeColor: string }
   );
 };
 
-// ... Admin Components (SalesChart3D, LiveActivityGlobe, etc.) ...
 const SalesChart3D = ({ themeColor, active }: { themeColor: string, active: boolean }) => {
   const data = useMemo(() => [40, 65, 30, 85, 50, 95, 70], []);
   const days = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
@@ -1222,6 +1030,8 @@ const AdminFloatingPackages = ({ themeColor }: { themeColor: string }) => {
         </group>
     )
 }
+
+// --- NEW ADMIN UI COMPONENTS ---
 
 const AdminStatCard = ({ title, value, subtext, trend, icon: Icon, color, trendColor, bgColor, onHover }: any) => (
   <div onMouseEnter={onHover} className={`${bgColor} backdrop-blur-md border border-white/5 rounded-xl p-4 md:p-5 flex flex-col justify-between h-32 md:h-36 relative overflow-hidden group hover:border-white/10 transition-colors`}>
@@ -1418,7 +1228,6 @@ const VideoModal = ({ isOpen, onClose }) => {
 };
 
 const AuthModal = ({ isOpen, onClose }) => {
-  // ... (No changes here, kept as is in existing file)
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -1457,12 +1266,6 @@ const AuthModal = ({ isOpen, onClose }) => {
     e.preventDefault();
     setError('');
 
-    // --- FRONTEND VALIDATION ---
-    if (password.length < 6) {
-        setError("Password must be at least 6 characters.");
-        return;
-    }
-
     if (mode === 'register') {
        if (password !== confirmPassword) {
          setError("Passwords do not match");
@@ -1470,22 +1273,17 @@ const AuthModal = ({ isOpen, onClose }) => {
        }
        try {
          const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+         // Note: Actual file upload to storage is skipped as per requirements ("don't save user info").
+         // We update profile with name.
          await updateProfile(userCredential.user, { displayName: name });
          showToast(`WELCOME TO THE TRIBE, ${name.toUpperCase()}`);
          onClose();
        } catch (error: any) {
-         // Specific Firebase error handling
          if (error.code === 'auth/email-already-in-use') {
            setError("User already exists. Sign in?");
-         } else if (error.code === 'auth/weak-password') {
-           setError("Password must be at least 6 characters.");
          } else {
            console.error(error);
-           // Safely extract error message and clean it up
-           const rawMsg = error.message || "Registration failed. Try again.";
-           // Remove "Firebase: " and error code suffix like "(auth/weak-password)"
-           const cleanMsg = rawMsg.replace('Firebase: ', '').replace(/\(auth\/.*\)\.?/, '').trim();
-           setError(cleanMsg);
+           setError("Registration failed. Try again.");
          }
        }
     } else {
@@ -1495,6 +1293,7 @@ const AuthModal = ({ isOpen, onClose }) => {
          onClose();
        } catch (error: any) {
          console.error("Login Error:", error.code);
+         // Display specific message as requested for any login failure
          setError("Password or Email Incorrect");
        }
     }
@@ -1515,10 +1314,10 @@ const AuthModal = ({ isOpen, onClose }) => {
 
                 {error && (
                     <div className="mb-4 p-3 bg-red-900/30 border border-red-500/50 rounded flex items-center gap-2 text-red-200 text-xs">
-                        <AlertTriangle size={14} className="text-red-500 shrink-0" />
-                        <span className="break-words">{error}</span>
+                        <AlertTriangle size={14} className="text-red-500" />
+                        {error}
                         {error === "User already exists. Sign in?" && (
-                            <button onClick={() => { setMode('login'); setError(''); }} className="ml-auto underline font-bold shrink-0">Sign In</button>
+                            <button onClick={() => { setMode('login'); setError(''); }} className="ml-auto underline font-bold">Sign In</button>
                         )}
                     </div>
                 )}
@@ -1588,83 +1387,79 @@ const AuthModal = ({ isOpen, onClose }) => {
 }
 
 const CartSidebar = ({ isOpen, onClose, cart, updateQuantity, removeFromCart, clearCart, onCheckoutSuccess, onOrderComplete }) => {
-  const [isPayPalOpen, setIsPayPalOpen] = useState(false);
+  const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [checkedOut, setCheckedOut] = useState(false);
   const { showToast } = useToast();
   const total = cart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
 
-  const handlePayPalSuccess = (details: any) => {
-      setIsPayPalOpen(false);
+  const handleCheckout = () => {
+    setIsCheckingOut(true);
+    setTimeout(() => {
+      setIsCheckingOut(false);
       setCheckedOut(true);
       onCheckoutSuccess();
       onOrderComplete(cart);
       clearCart();
-      showToast("PAYMENT SUCCESSFUL");
+      showToast("ORDER SUCCESSFUL");
+    }, 2000);
   };
 
   return (
-    <>
-      <PayPalCheckoutModal 
-         isOpen={isPayPalOpen} 
-         onClose={() => setIsPayPalOpen(false)} 
-         cart={cart}
-         total={total}
-         onSuccess={handlePayPalSuccess}
-      />
-      <AnimatePresence>
-        {isOpen && (
-          <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60]" />
-            <motion.div initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ type: "spring", damping: 20 }} className="fixed top-0 right-0 h-full w-full max-w-md bg-black/90 border-l border-white/10 z-[70] flex flex-col shadow-2xl shadow-[var(--theme-color)]/20">
-              <div className="p-6 border-b border-white/10 flex justify-between items-center">
-                <h2 className="text-xl font-brand tracking-widest text-[var(--theme-color)]">YOUR STASH</h2>
-                <button onClick={onClose} className="text-gray-400 hover:text-white"><X size={24} /></button>
-              </div>
-              <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                {cart.length === 0 && !checkedOut ? (
-                  <div className="flex flex-col items-center justify-center h-full text-gray-500"><ShoppingBag size={48} className="mb-4 opacity-20" /><p>YOUR CART IS EMPTY</p></div>
-                ) : checkedOut ? (
-                  <div className="flex flex-col items-center justify-center h-full text-[var(--theme-color)]">
-                    <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="w-20 h-20 bg-[var(--theme-color)] rounded-full flex items-center justify-center text-black mb-6"><Check size={40} /></motion.div>
-                    <h3 className="text-2xl font-brand mb-2">ORDER CONFIRMED</h3>
-                    <p className="text-gray-400 text-center text-sm max-w-xs">Thank you for supporting CHUMA. Check your email for download links and tracking info.</p>
-                  </div>
-                ) : (
-                  cart.map((item) => (
-                    <motion.div layout key={item.id} className="flex gap-4 bg-white/5 p-3 rounded-lg border border-white/5">
-                      <img src={item.img} className="w-20 h-20 object-cover rounded bg-gray-800" referrerPolicy="no-referrer" />
-                      <div className="flex-1 flex flex-col justify-between">
-                        <div><h4 className="font-bold text-sm leading-tight mb-1">{item.name}</h4><p className="text-xs text-gray-400">{item.type}</p></div>
-                        <div className="flex justify-between items-end">
-                          <span className="text-[var(--theme-color)] font-mono">${item.price}</span>
-                          <div className="flex items-center gap-3 bg-black/50 rounded-full px-2 py-1 border border-white/10">
-                             <button onClick={() => updateQuantity(item.id, -1)} className="hover:text-[var(--theme-color)]"><Minus size={12}/></button>
-                             <span className="text-xs font-bold w-4 text-center">{item.quantity}</span>
-                             <button onClick={() => updateQuantity(item.id, 1)} className="hover:text-[var(--theme-color)]"><Plus size={12}/></button>
-                          </div>
+    <AnimatePresence>
+      {isOpen && (
+        <>
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60]" />
+          <motion.div initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ type: "spring", damping: 20 }} className="fixed top-0 right-0 h-full w-full max-w-md bg-black/90 border-l border-white/10 z-[70] flex flex-col shadow-2xl shadow-[var(--theme-color)]/20">
+            <div className="p-6 border-b border-white/10 flex justify-between items-center">
+              <h2 className="text-xl font-brand tracking-widest text-[var(--theme-color)]">YOUR STASH</h2>
+              <button onClick={onClose} className="text-gray-400 hover:text-white"><X size={24} /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {cart.length === 0 && !checkedOut ? (
+                <div className="flex flex-col items-center justify-center h-full text-gray-500"><ShoppingBag size={48} className="mb-4 opacity-20" /><p>YOUR CART IS EMPTY</p></div>
+              ) : checkedOut ? (
+                <div className="flex flex-col items-center justify-center h-full text-[var(--theme-color)]">
+                  <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="w-20 h-20 bg-[var(--theme-color)] rounded-full flex items-center justify-center text-black mb-6"><Check size={40} /></motion.div>
+                  <h3 className="text-2xl font-brand mb-2">ORDER CONFIRMED</h3>
+                  <p className="text-gray-400 text-center text-sm max-w-xs">Thank you for supporting CHUMA. Check your email for download links and tracking info.</p>
+                </div>
+              ) : (
+                cart.map((item) => (
+                  <motion.div layout key={item.id} className="flex gap-4 bg-white/5 p-3 rounded-lg border border-white/5">
+                    <img src={item.img} className="w-20 h-20 object-cover rounded bg-gray-800" referrerPolicy="no-referrer" />
+                    <div className="flex-1 flex flex-col justify-between">
+                      <div><h4 className="font-bold text-sm leading-tight mb-1">{item.name}</h4><p className="text-xs text-gray-400">{item.type}</p></div>
+                      <div className="flex justify-between items-end">
+                        <span className="text-[var(--theme-color)] font-mono">${item.price}</span>
+                        <div className="flex items-center gap-3 bg-black/50 rounded-full px-2 py-1 border border-white/10">
+                           <button onClick={() => updateQuantity(item.id, -1)} className="hover:text-[var(--theme-color)]"><Minus size={12}/></button>
+                           <span className="text-xs font-bold w-4 text-center">{item.quantity}</span>
+                           <button onClick={() => updateQuantity(item.id, 1)} className="hover:text-[var(--theme-color)]"><Plus size={12}/></button>
                         </div>
                       </div>
-                      <button onClick={() => removeFromCart(item.id)} className="text-gray-600 hover:text-red-500 self-start"><X size={16} /></button>
-                    </motion.div>
-                  ))
-                )}
-              </div>
-              {!checkedOut && cart.length > 0 && (
-                <div className="p-6 border-t border-white/10 bg-black/50">
-                  <div className="flex justify-between items-center mb-6"><span className="text-gray-400 text-sm tracking-widest">TOTAL</span><span className="text-2xl font-brand text-[var(--theme-color)]">${total}</span></div>
-                  <button onClick={() => setIsPayPalOpen(true)} className="w-full py-4 bg-[var(--theme-color)] hover:bg-white text-black font-bold font-brand tracking-widest flex items-center justify-center gap-2 transition-all"><CreditCard size={18} /> CHECKOUT</button>
-                  <p className="text-[10px] text-center text-gray-600 mt-3 flex items-center justify-center gap-2">SECURED BY PAYPAL & STRIPE <Shield size={10} /></p>
-                </div>
+                    </div>
+                    <button onClick={() => removeFromCart(item.id)} className="text-gray-600 hover:text-red-500 self-start"><X size={16} /></button>
+                  </motion.div>
+                ))
               )}
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-    </>
+            </div>
+            {!checkedOut && cart.length > 0 && (
+              <div className="p-6 border-t border-white/10 bg-black/50">
+                <div className="flex justify-between items-center mb-6"><span className="text-gray-400 text-sm tracking-widest">TOTAL</span><span className="text-2xl font-brand text-[var(--theme-color)]">${total}</span></div>
+                <button onClick={handleCheckout} disabled={isCheckingOut} className="w-full py-4 bg-[var(--theme-color)] hover:bg-white text-black font-bold font-brand tracking-widest flex items-center justify-center gap-2 transition-all">{isCheckingOut ? <span className="animate-pulse">PROCESSING...</span> : <><CreditCard size={18} /> CHECKOUT</>}</button>
+                <p className="text-[10px] text-center text-gray-600 mt-3 flex items-center justify-center gap-2">SECURED BY FLUTTERWAVE & STRIPE <Shield size={10} /></p>
+              </div>
+            )}
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
   );
 };
 
-// ... (Rest of existing components like MinimalCatalogue, etc.)
+// ... MinimalCatalogue, WallOfFame ...
+// (These are purely presentational and unchanged)
+
 const MinimalCatalogue = ({ tracks }) => (
     <div className="hidden md:flex absolute right-8 top-1/2 -translate-y-1/2 flex-col gap-4 pointer-events-auto">
       <h4 className="text-[10px] font-brand tracking-widest text-white/30 -rotate-90 absolute -right-12 top-1/2 w-32 text-center">RECENT DROPS</h4>
@@ -1698,9 +1493,13 @@ const WallOfFame = ({ images, isAdmin, onAdd, onRemove }) => (
       {isAdmin && <button onClick={onAdd} className="w-8 h-8 rounded-full bg-[var(--theme-color)]/20 text-[var(--theme-color)] border border-[var(--theme-color)] flex items-center justify-center hover:bg-[var(--theme-color)] hover:text-black transition-all self-center" title="Add Image to Wall"><Plus size={16} /></button>}
     </div>
 );
+
+// ... Navigation, HeroContent, MusicSection ...
+// (Purely UI and presentation)
+
 const Navigation = ({ active, setActive, user, onHover }) => {
   const navItems = [
-    { id: 'hero', icon: Box, label: 'HOME' }, 
+    { id: 'hero', icon: Box, label: 'HOME' }, // Changed to Box to differentiate
     { id: 'music', icon: Music, label: 'MUSIC' },
     { id: 'events', icon: Calendar, label: 'TOUR' },
     { id: 'merch', icon: ShoppingBag, label: 'STORE' },
@@ -1708,6 +1507,7 @@ const Navigation = ({ active, setActive, user, onHover }) => {
     { id: 'contact', icon: Mail, label: 'CONTACT' },
   ];
   
+  // Add Profile button if user is logged in
   if (user) navItems.push({ id: 'profile', icon: User, label: 'PROFILE' });
   if (user?.role === 'admin') navItems.push({ id: 'admin', icon: Shield, label: 'ADMIN' });
 
@@ -1725,6 +1525,7 @@ const Navigation = ({ active, setActive, user, onHover }) => {
     </div>
   );
 };
+
 const HeroContent = ({ onExplore, onGoToStore, tracks, wallImages, isAdmin, onWallImageAdd, onWallImageRemove }) => {
   const [showVideo, setShowVideo] = useState(false);
   return (
@@ -1747,7 +1548,6 @@ const HeroContent = ({ onExplore, onGoToStore, tracks, wallImages, isAdmin, onWa
   );
 };
 
-// ... MusicSection, EventsSection, MerchSection ...
 const MusicSection = ({ tracks, toggleFavorite, favorites, isPlayingId, setIsPlayingId }) => {
   const { showToast } = useToast();
   const handleShare = (title) => {
@@ -1836,6 +1636,8 @@ const MerchSection = ({ merch, addToCart, toggleFavorite, favorites }) => {
     </div>
   );
 };
+
+// ... FavoritesSection Removed (Functionality retained via hearts, but page gone) ...
 const GallerySectionOverlay = () => {
     return (
         <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-start pt-8 z-10">
@@ -1876,6 +1678,7 @@ const ContactSection = () => {
     </div>
   );
 };
+
 const ProfileSection = ({ user, onUpdate, onLogout }: any) => {
   const [name, setName] = useState(user?.name || "");
   const [isEditing, setIsEditing] = useState(false);
@@ -1958,7 +1761,7 @@ const ProfileSection = ({ user, onUpdate, onLogout }: any) => {
     </div>
   );
 };
-// ... AdminSection ...
+
 const AdminSection = ({ user, onLogout, tracks, onAddTrack, onRemoveTrack, merch, onAddMerch, onRemoveMerch, orders, onDeleteOrder, setHoveredAdminItem }) => {
   const [activeTab, setActiveTab] = useState<'analytics' | 'content'>('analytics');
   const [searchTerm, setSearchTerm] = useState("");
@@ -2155,7 +1958,7 @@ function App() {
   const [wallImages, setWallImages] = useState(INITIAL_WALL_IMAGES);
   const [isPlayingId, setIsPlayingId] = useState(null);
   const [hoveredNav, setHoveredNav] = useState(null);
-  const [adminHover, setAdminHover] = useState(null); 
+  const [adminHover, setAdminHover] = useState(null); // Track hovered admin section for 3D feedback
   const audioRef = useRef<HTMLAudioElement>(null);
   const [tracks, setTracks] = useState(INITIAL_TRACKS);
   const [merch, setMerch] = useState(INITIAL_MERCH);
@@ -2225,6 +2028,7 @@ function App() {
               await updateProfile(auth.currentUser, { displayName: updatedUser.name });
               setUser(prev => ({...prev, name: updatedUser.name}));
           } else {
+              // Fallback for demo mode
               setUser(prev => ({...prev, name: updatedUser.name}));
           }
       } catch (e) {
@@ -2249,7 +2053,7 @@ function App() {
       customer: user ? user.name : "Guest User",
       email: user ? user.email || "guest@email.com" : "guest@email.com",
       price: item.price * item.quantity,
-      payment: "PayPal", 
+      payment: "Credit Card",
       status: "Pending",
       statusColor: "bg-orange-500",
       img: item.img,
@@ -2273,91 +2077,89 @@ function App() {
   };
 
   return (
-    <PayPalScriptProvider options={initialPayPalOptions}>
-      <ToastProvider>
-        <AnimatePresence>{loading && <Preloader onComplete={() => setLoading(false)} />}</AnimatePresence>
-        <audio ref={audioRef} src="https://cdn.pixabay.com/audio/2022/10/25/audio_2456e77894.mp3" loop crossOrigin="anonymous" />
-        <div className="w-full h-screen bg-black text-white overflow-hidden select-none" style={{ "--theme-color": currentTheme.hex, "--theme-rgb": currentTheme.rgb } as React.CSSProperties}>
-          <CustomCursor />
-          <LiveTicker isAdmin={user?.role === 'admin'} />
-          <CartSidebar 
-            isOpen={cartOpen} 
-            onClose={() => setCartOpen(false)} 
-            cart={cart} 
-            updateQuantity={updateQuantity} 
-            removeFromCart={removeFromCart} 
-            clearCart={() => setCart([])} 
-            onCheckoutSuccess={() => {}}
-            onOrderComplete={handleOrderComplete}
-          />
-          <AuthModal isOpen={authOpen} onClose={() => setAuthOpen(false)} />
-          <header className="fixed top-0 left-0 w-full p-4 md:p-6 z-50 flex justify-between items-start pointer-events-none">
-            <div><h1 className="text-xl md:text-2xl font-bold font-brand tracking-tighter pointer-events-auto cursor-pointer" onClick={() => setActiveSection('hero')}>CHUMA</h1></div>
-            <div className="flex gap-4 pointer-events-auto items-center">
-              <button onClick={toggleTheme} className="p-2 hover:text-[var(--theme-color)] transition-colors group flex flex-col items-center" title="Toggle Theme">
-                  <div className="w-4 h-4 rounded-full border border-current flex items-center justify-center" style={{ backgroundColor: currentTheme.hex }}>
-                      <div className="w-2 h-2 bg-black rounded-full" />
-                  </div>
-              </button>
-              <button onClick={() => setCartOpen(true)} className="relative p-2 hover:text-[var(--theme-color)] transition-colors"><ShoppingBag size={20} />{cart.length > 0 && (<span className="absolute top-0 right-0 w-4 h-4 bg-[var(--theme-color)] text-black text-[10px] font-bold rounded-full flex items-center justify-center">{cart.reduce((a,b) => a + b.quantity, 0)}</span>)}</button>
-              {user ? (
-                <div className="flex items-center gap-4 pl-4 border-l border-white/10">
-                  {user.role === 'admin' && (<div className="hidden md:flex items-center gap-2 px-3 py-1 bg-[var(--theme-color)]/10 border border-[var(--theme-color)] rounded-full"><div className="w-2 h-2 bg-[var(--theme-color)] rounded-full animate-pulse" /><span className="text-[10px] font-bold text-[var(--theme-color)]">ADMIN</span></div>)}
-                  <div className="flex items-center gap-2 group relative">
-                      <button onClick={() => setActiveSection('profile')} className="flex items-center gap-2 hover:text-[var(--theme-color)] transition-colors">
-                          <span className="text-xs font-bold uppercase tracking-widest hidden md:block text-gray-300 group-hover:text-[var(--theme-color)]">{user.name}</span>
-                          <div className="w-8 h-8 rounded-full bg-gray-800 border border-white/10 overflow-hidden group-hover:border-[var(--theme-color)] transition-colors">
-                              {user.photoURL ? <img src={user.photoURL} className="w-full h-full object-cover" alt="Profile" /> : <User size={20} className="w-full h-full p-1 text-gray-400" />}
-                          </div>
-                      </button>
-                      <button onClick={handleLogout} className="hover:text-red-500 transition-colors ml-2" title="Logout"><LogOut size={20} /></button>
-                  </div>
+    <ToastProvider>
+      <AnimatePresence>{loading && <Preloader onComplete={() => setLoading(false)} />}</AnimatePresence>
+      <audio ref={audioRef} src="https://cdn.pixabay.com/audio/2022/10/25/audio_2456e77894.mp3" loop crossOrigin="anonymous" />
+      <div className="w-full h-screen bg-black text-white overflow-hidden select-none" style={{ "--theme-color": currentTheme.hex, "--theme-rgb": currentTheme.rgb } as React.CSSProperties}>
+        <CustomCursor />
+        <LiveTicker isAdmin={user?.role === 'admin'} />
+        <CartSidebar 
+           isOpen={cartOpen} 
+           onClose={() => setCartOpen(false)} 
+           cart={cart} 
+           updateQuantity={updateQuantity} 
+           removeFromCart={removeFromCart} 
+           clearCart={() => setCart([])} 
+           onCheckoutSuccess={() => {}}
+           onOrderComplete={handleOrderComplete}
+        />
+        <AuthModal isOpen={authOpen} onClose={() => setAuthOpen(false)} />
+        <header className="fixed top-0 left-0 w-full p-4 md:p-6 z-50 flex justify-between items-start pointer-events-none">
+          <div><h1 className="text-xl md:text-2xl font-bold font-brand tracking-tighter pointer-events-auto cursor-pointer" onClick={() => setActiveSection('hero')}>CHUMA</h1></div>
+          <div className="flex gap-4 pointer-events-auto items-center">
+            <button onClick={toggleTheme} className="p-2 hover:text-[var(--theme-color)] transition-colors group flex flex-col items-center" title="Toggle Theme">
+                <div className="w-4 h-4 rounded-full border border-current flex items-center justify-center" style={{ backgroundColor: currentTheme.hex }}>
+                    <div className="w-2 h-2 bg-black rounded-full" />
                 </div>
-              ) : (<button onClick={() => setAuthOpen(true)} className="ml-2 text-[10px] md:text-xs font-bold tracking-widest text-black bg-[var(--theme-color)] px-3 py-1.5 md:px-5 md:py-2 hover:bg-white transition-colors clip-path-slant flex items-center gap-2" style={{ clipPath: 'polygon(10% 0, 100% 0, 90% 100%, 0% 100%)' }}><LogIn size={14} /> LOGIN <span className="hidden md:inline">/ JOIN</span></button>)}
-            </div>
-          </header>
-          <div className="absolute inset-0 z-0">
-            <Canvas shadows dpr={[1, 2]}>
-              <Suspense fallback={null}>
-                <PerspectiveCamera makeDefault position={[0, 0, 6]} />
-                <Environment preset="city" />
-                <BackgroundScene arMode={arMode} vibe={vibe} partyMode={isPlayingId !== null} matrixMode={matrixMode} weather={weather} themeColor={currentTheme.hex} />
-                <CameraController section={activeSection} idleMode={false} />
-                <Center>
-                  {activeSection === 'hero' && (<group><AbstractAvatar activeSection={activeSection} arMode={arMode} vibe={vibe} partyMode={isPlayingId !== null} matrixMode={matrixMode} themeColor={currentTheme.hex} /><Hero3DText vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /><AfroOrbitals vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /><ReactiveFloor vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /></group>)}
-                  {activeSection === 'music' && <VinylRecord isPlaying={isPlayingId !== null} vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} />}
-                  {activeSection === 'events' && <TourGlobe matrixMode={matrixMode} themeColor={currentTheme.hex} />}
-                  {activeSection === 'merch' && (<Float speed={2} rotationIntensity={0.5} floatIntensity={0.5}><mesh position={[0, 0, 0]} rotation={[0.5, 0.5, 0]}><boxGeometry args={[2, 2, 2]} /><meshStandardMaterial color={currentTheme.hex} wireframe={true} /></mesh></Float>)}
-                  {activeSection === 'gallery' && <Gallery3D images={wallImages} themeColor={currentTheme.hex} />}
-                  {activeSection === 'profile' && (<group><AbstractAvatar activeSection={activeSection} arMode={arMode} vibe={vibe} partyMode={isPlayingId !== null} matrixMode={matrixMode} themeColor={currentTheme.hex} /><Hero3DText vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /><AfroOrbitals vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /></group>)}
-                  {activeSection === 'admin' && (
-                      <group>
-                          <SalesChart3D themeColor={currentTheme.hex} active={adminHover === 'revenue'} />
-                          <LiveActivityGlobe themeColor={currentTheme.hex} active={adminHover === 'stats' || adminHover === 'happiness'} />
-                          {adminHover === 'orders' && <AdminFloatingPackages themeColor={currentTheme.hex} />}
-                      </group>
-                  )}
-                </Center>
-                <NavHologram hoveredNav={hoveredNav} matrixMode={matrixMode} themeColor={currentTheme.hex} />
-                <MouseSpotlight themeColor={currentTheme.hex} />
-                <MouseTrail themeColor={currentTheme.hex} />
-              </Suspense>
-            </Canvas>
+            </button>
+            <button onClick={() => setCartOpen(true)} className="relative p-2 hover:text-[var(--theme-color)] transition-colors"><ShoppingBag size={20} />{cart.length > 0 && (<span className="absolute top-0 right-0 w-4 h-4 bg-[var(--theme-color)] text-black text-[10px] font-bold rounded-full flex items-center justify-center">{cart.reduce((a,b) => a + b.quantity, 0)}</span>)}</button>
+            {user ? (
+               <div className="flex items-center gap-4 pl-4 border-l border-white/10">
+                 {user.role === 'admin' && (<div className="hidden md:flex items-center gap-2 px-3 py-1 bg-[var(--theme-color)]/10 border border-[var(--theme-color)] rounded-full"><div className="w-2 h-2 bg-[var(--theme-color)] rounded-full animate-pulse" /><span className="text-[10px] font-bold text-[var(--theme-color)]">ADMIN</span></div>)}
+                 <div className="flex items-center gap-2 group relative">
+                    <button onClick={() => setActiveSection('profile')} className="flex items-center gap-2 hover:text-[var(--theme-color)] transition-colors">
+                        <span className="text-xs font-bold uppercase tracking-widest hidden md:block text-gray-300 group-hover:text-[var(--theme-color)]">{user.name}</span>
+                        <div className="w-8 h-8 rounded-full bg-gray-800 border border-white/10 overflow-hidden group-hover:border-[var(--theme-color)] transition-colors">
+                            {user.photoURL ? <img src={user.photoURL} className="w-full h-full object-cover" alt="Profile" /> : <User size={20} className="w-full h-full p-1 text-gray-400" />}
+                        </div>
+                    </button>
+                    <button onClick={handleLogout} className="hover:text-red-500 transition-colors ml-2" title="Logout"><LogOut size={20} /></button>
+                 </div>
+               </div>
+            ) : (<button onClick={() => setAuthOpen(true)} className="ml-2 text-[10px] md:text-xs font-bold tracking-widest text-black bg-[var(--theme-color)] px-3 py-1.5 md:px-5 md:py-2 hover:bg-white transition-colors clip-path-slant flex items-center gap-2" style={{ clipPath: 'polygon(10% 0, 100% 0, 90% 100%, 0% 100%)' }}><LogIn size={14} /> LOGIN <span className="hidden md:inline">/ JOIN</span></button>)}
           </div>
-          <AnimatePresence mode="wait">
-            {activeSection === 'hero' && (<motion.div key="hero" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><HeroContent onExplore={() => setActiveSection('music')} onGoToStore={() => setActiveSection('merch')} tracks={tracks} wallImages={wallImages} isAdmin={user?.role === 'admin'} onWallImageAdd={() => {}} onWallImageRemove={(id) => setWallImages(prev => prev.filter(i => i.id !== id))} /></motion.div>)}
-            {activeSection === 'music' && (<motion.div key="music" initial={{ opacity: 0, x: 50 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -50 }} className="absolute inset-0 z-10"><MusicSection tracks={tracks} toggleFavorite={toggleFavorite} favorites={favorites.tracks} isPlayingId={isPlayingId} setIsPlayingId={setIsPlayingId} /></motion.div>)}
-            {activeSection === 'events' && (<motion.div key="events" initial={{ opacity: 0, y: 50 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -50 }} className="absolute inset-0 z-10"><EventsSection tourDates={INITIAL_TOUR_DATES} /></motion.div>)}
-            {activeSection === 'merch' && (<motion.div key="merch" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 1 }} className="absolute inset-0 z-10"><MerchSection merch={merch} addToCart={addToCart} toggleFavorite={toggleFavorite} favorites={favorites.merch} /></motion.div>)}
-            {activeSection === 'gallery' && (<motion.div key="gallery" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><GallerySectionOverlay /></motion.div>)}
-            {activeSection === 'contact' && (<motion.div key="contact" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><ContactSection /></motion.div>)}
-            {activeSection === 'profile' && (<motion.div key="profile" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><ProfileSection user={user} onUpdate={handleUpdateUser} onLogout={handleLogout} /></motion.div>)}
-            {activeSection === 'admin' && (<motion.div key="admin" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><AdminSection user={user} onLogout={handleLogout} tracks={tracks} onAddTrack={handleAddTrack} onRemoveTrack={handleRemoveTrack} merch={merch} onAddMerch={handleAddMerch} onRemoveMerch={handleRemoveMerch} orders={orders} onDeleteOrder={handleDeleteOrder} setHoveredAdminItem={setAdminHover} /></motion.div>)}
-          </AnimatePresence>
-          <Navigation active={activeSection} setActive={setActiveSection} user={user} onHover={setHoveredNav} />
+        </header>
+        <div className="absolute inset-0 z-0">
+          <Canvas shadows dpr={[1, 2]}>
+            <Suspense fallback={null}>
+              <PerspectiveCamera makeDefault position={[0, 0, 6]} />
+              <Environment preset="city" />
+              <BackgroundScene arMode={arMode} vibe={vibe} partyMode={isPlayingId !== null} matrixMode={matrixMode} weather={weather} themeColor={currentTheme.hex} />
+              <CameraController section={activeSection} idleMode={false} />
+              <Center>
+                {activeSection === 'hero' && (<group><AbstractAvatar activeSection={activeSection} arMode={arMode} vibe={vibe} partyMode={isPlayingId !== null} matrixMode={matrixMode} themeColor={currentTheme.hex} /><Hero3DText vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /><AfroOrbitals vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /><ReactiveFloor vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /></group>)}
+                {activeSection === 'music' && <VinylRecord isPlaying={isPlayingId !== null} vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} />}
+                {activeSection === 'events' && <TourGlobe matrixMode={matrixMode} themeColor={currentTheme.hex} />}
+                {activeSection === 'merch' && (<Float speed={2} rotationIntensity={0.5} floatIntensity={0.5}><mesh position={[0, 0, 0]} rotation={[0.5, 0.5, 0]}><boxGeometry args={[2, 2, 2]} /><meshStandardMaterial color={currentTheme.hex} wireframe={true} /></mesh></Float>)}
+                {activeSection === 'gallery' && <Gallery3D images={wallImages} themeColor={currentTheme.hex} />}
+                {activeSection === 'profile' && (<group><AbstractAvatar activeSection={activeSection} arMode={arMode} vibe={vibe} partyMode={isPlayingId !== null} matrixMode={matrixMode} themeColor={currentTheme.hex} /><Hero3DText vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /><AfroOrbitals vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /></group>)}
+                {activeSection === 'admin' && (
+                    <group>
+                        <SalesChart3D themeColor={currentTheme.hex} active={adminHover === 'revenue'} />
+                        <LiveActivityGlobe themeColor={currentTheme.hex} active={adminHover === 'stats' || adminHover === 'happiness'} />
+                        {adminHover === 'orders' && <AdminFloatingPackages themeColor={currentTheme.hex} />}
+                    </group>
+                )}
+              </Center>
+              <NavHologram hoveredNav={hoveredNav} matrixMode={matrixMode} themeColor={currentTheme.hex} />
+              <MouseSpotlight themeColor={currentTheme.hex} />
+              <MouseTrail themeColor={currentTheme.hex} />
+            </Suspense>
+          </Canvas>
         </div>
-      </ToastProvider>
-    </PayPalScriptProvider>
+        <AnimatePresence mode="wait">
+          {activeSection === 'hero' && (<motion.div key="hero" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><HeroContent onExplore={() => setActiveSection('music')} onGoToStore={() => setActiveSection('merch')} tracks={tracks} wallImages={wallImages} isAdmin={user?.role === 'admin'} onWallImageAdd={() => {}} onWallImageRemove={(id) => setWallImages(prev => prev.filter(i => i.id !== id))} /></motion.div>)}
+          {activeSection === 'music' && (<motion.div key="music" initial={{ opacity: 0, x: 50 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -50 }} className="absolute inset-0 z-10"><MusicSection tracks={tracks} toggleFavorite={toggleFavorite} favorites={favorites.tracks} isPlayingId={isPlayingId} setIsPlayingId={setIsPlayingId} /></motion.div>)}
+          {activeSection === 'events' && (<motion.div key="events" initial={{ opacity: 0, y: 50 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -50 }} className="absolute inset-0 z-10"><EventsSection tourDates={INITIAL_TOUR_DATES} /></motion.div>)}
+          {activeSection === 'merch' && (<motion.div key="merch" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 1 }} className="absolute inset-0 z-10"><MerchSection merch={merch} addToCart={addToCart} toggleFavorite={toggleFavorite} favorites={favorites.merch} /></motion.div>)}
+          {activeSection === 'gallery' && (<motion.div key="gallery" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><GallerySectionOverlay /></motion.div>)}
+          {activeSection === 'contact' && (<motion.div key="contact" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><ContactSection /></motion.div>)}
+          {activeSection === 'profile' && (<motion.div key="profile" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><ProfileSection user={user} onUpdate={handleUpdateUser} onLogout={handleLogout} /></motion.div>)}
+          {activeSection === 'admin' && (<motion.div key="admin" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><AdminSection user={user} onLogout={handleLogout} tracks={tracks} onAddTrack={handleAddTrack} onRemoveTrack={handleRemoveTrack} merch={merch} onAddMerch={handleAddMerch} onRemoveMerch={handleRemoveMerch} orders={orders} onDeleteOrder={handleDeleteOrder} setHoveredAdminItem={setAdminHover} /></motion.div>)}
+        </AnimatePresence>
+        <Navigation active={activeSection} setActive={setActiveSection} user={user} onHover={setHoveredNav} />
+      </div>
+    </ToastProvider>
   );
 }
 
