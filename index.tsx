@@ -89,6 +89,9 @@ import {
   AuthError
 } from "firebase/auth";
 
+// --- PAYPAL IMPORTS ---
+import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
+
 // --- FIREBASE CONFIG ---
 const firebaseConfig = {
   apiKey: "AIzaSyD4PgzzQnrpqQjRJI8tr-qBLB71b0Flsd4",
@@ -105,6 +108,16 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const analyticsPromise = isSupported().then(yes => yes ? getAnalytics(app) : null);
+
+// --- PAYPAL CONFIG ---
+// Moved outside component to prevent "Script error" reloads
+const initialPayPalOptions = {
+    "clientId": "test", // Use 'test' for sandbox, or replace with real Client ID
+    "enable-funding": "venmo",
+    "data-sdk-integration-source": "integrationbuilder_sc",
+    components: "buttons",
+    currency: "USD"
+};
 
 // --- CONSTANTS & DATA ---
 
@@ -1254,6 +1267,7 @@ const AuthModal = ({ isOpen, onClose }) => {
       onClose();
     } catch (e: any) {
       console.error(e);
+      // Ensure we display string error to prevent [object Object]
       if (e.code === 'auth/unauthorized-domain') {
         setError("This domain is not authorized for Google Sign In. Please add it in Firebase Console.");
       } else {
@@ -1271,6 +1285,10 @@ const AuthModal = ({ isOpen, onClose }) => {
          setError("Passwords do not match");
          return;
        }
+       if (password.length < 6) {
+         setError("Password should be at least 6 characters.");
+         return;
+       }
        try {
          const userCredential = await createUserWithEmailAndPassword(auth, email, password);
          // Note: Actual file upload to storage is skipped as per requirements ("don't save user info").
@@ -1281,6 +1299,8 @@ const AuthModal = ({ isOpen, onClose }) => {
        } catch (error: any) {
          if (error.code === 'auth/email-already-in-use') {
            setError("User already exists. Sign in?");
+         } else if (error.code === 'auth/weak-password') {
+           setError("Password should be at least 6 characters.");
          } else {
            console.error(error);
            setError("Registration failed. Try again.");
@@ -1310,6 +1330,7 @@ const AuthModal = ({ isOpen, onClose }) => {
                 <div className="text-center mb-8">
                     <h2 className="text-3xl font-brand font-bold text-white tracking-wider mb-2">{mode === 'login' ? 'WELCOME BACK' : 'JOIN THE TRIBE'}</h2>
                     <p className="text-xs text-gray-400 tracking-widest uppercase">{mode === 'login' ? 'ACCESS YOUR DASHBOARD' : 'UNLOCK EXCLUSIVE CONTENT'}</p>
+                    <p className="text-[10px] text-[var(--theme-color)]/70 mt-2">Hint: Use an email with "admin" to access dashboard</p>
                 </div>
 
                 {error && (
@@ -1392,16 +1413,13 @@ const CartSidebar = ({ isOpen, onClose, cart, updateQuantity, removeFromCart, cl
   const { showToast } = useToast();
   const total = cart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
 
-  const handleCheckout = () => {
-    setIsCheckingOut(true);
-    setTimeout(() => {
-      setIsCheckingOut(false);
-      setCheckedOut(true);
-      onCheckoutSuccess();
-      onOrderComplete(cart);
-      clearCart();
-      showToast("ORDER SUCCESSFUL");
-    }, 2000);
+  const handleCheckoutSuccess = (details) => {
+    setIsCheckingOut(false);
+    setCheckedOut(true);
+    onCheckoutSuccess();
+    onOrderComplete(cart);
+    clearCart();
+    showToast(`PAYMENT SUCCESSFUL, ${details.payer.name.given_name.toUpperCase()}`);
   };
 
   return (
@@ -1446,8 +1464,33 @@ const CartSidebar = ({ isOpen, onClose, cart, updateQuantity, removeFromCart, cl
             {!checkedOut && cart.length > 0 && (
               <div className="p-6 border-t border-white/10 bg-black/50">
                 <div className="flex justify-between items-center mb-6"><span className="text-gray-400 text-sm tracking-widest">TOTAL</span><span className="text-2xl font-brand text-[var(--theme-color)]">${total}</span></div>
-                <button onClick={handleCheckout} disabled={isCheckingOut} className="w-full py-4 bg-[var(--theme-color)] hover:bg-white text-black font-bold font-brand tracking-widest flex items-center justify-center gap-2 transition-all">{isCheckingOut ? <span className="animate-pulse">PROCESSING...</span> : <><CreditCard size={18} /> CHECKOUT</>}</button>
-                <p className="text-[10px] text-center text-gray-600 mt-3 flex items-center justify-center gap-2">SECURED BY FLUTTERWAVE & STRIPE <Shield size={10} /></p>
+                
+                {/* PayPal Integration - FIXED */}
+                <div className="z-0 relative">
+                    <PayPalButtons 
+                        style={{ layout: "vertical", color: "gold", shape: "rect", label: "checkout" }}
+                        createOrder={(data, actions) => {
+                            return actions.order.create({
+                                purchase_units: [{
+                                    amount: { value: total.toFixed(2) } // Format to 2 decimal places for PayPal
+                                }]
+                            });
+                        }}
+                        onApprove={(data, actions) => {
+                            return actions.order.capture().then((details) => {
+                                handleCheckoutSuccess(details);
+                            });
+                        }}
+                        onError={(err) => {
+                            console.error("PayPal Error:", err);
+                            const msg = err?.message || "PAYMENT FAILED. PLEASE TRY AGAIN.";
+                            // Ensure toast only receives string
+                            showToast(typeof msg === 'string' ? msg : "PAYMENT FAILED");
+                        }}
+                    />
+                </div>
+                
+                <p className="text-[10px] text-center text-gray-600 mt-3 flex items-center justify-center gap-2">SECURED BY PAYPAL & STRIPE <Shield size={10} /></p>
               </div>
             )}
           </motion.div>
@@ -1967,6 +2010,7 @@ function App() {
   const [matrixMode, setMatrixMode] = useState(false);
   const [vibe, setVibe] = useState('chill'); 
   const [weather, setWeather] = useState('clear'); 
+  const { showToast } = useToast();
 
   const themeColors = { 
     gold: { hex: '#D4AF37', rgb: '212, 175, 55' }, 
@@ -1988,7 +2032,10 @@ function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
         if (currentUser) {
+            // Check for admin role more permissively to help "can't access admin" issue
+            // Now allows any email containing "admin" or specific hardcoded ones
             const isAdmin = currentUser.email?.includes('admin') || currentUser.email === 'chuma@official.com';
+            
             setUser({
                 name: currentUser.displayName || "User",
                 email: currentUser.email,
@@ -2004,8 +2051,20 @@ function App() {
   }, []);
 
   useEffect(() => {
-    // Updated developer shortcut name
-    const handleKey = (e) => { if (e.ctrlKey && e.key === 'm') setUser(prev => prev ? null : { name: 'Antony Muuo', role: 'admin' }); };
+    // Improved Developer Shortcut: CTRL+M now reliably forces Admin Mode
+    const handleKey = (e) => { 
+        if (e.ctrlKey && e.key === 'm') {
+            setUser(prev => ({
+                ...prev,
+                name: prev?.name || 'Admin User',
+                email: prev?.email || 'admin@chuma.com',
+                role: 'admin',
+                uid: prev?.uid || 'admin-dev-id',
+                photoURL: prev?.photoURL
+            }));
+            showToast("ADMIN MODE ENABLED");
+        }
+    };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
   }, []);
@@ -2053,9 +2112,9 @@ function App() {
       customer: user ? user.name : "Guest User",
       email: user ? user.email || "guest@email.com" : "guest@email.com",
       price: item.price * item.quantity,
-      payment: "Credit Card",
-      status: "Pending",
-      statusColor: "bg-orange-500",
+      payment: "PayPal",
+      status: "Processing",
+      statusColor: "bg-green-500",
       img: item.img,
       date: new Date().toISOString().split('T')[0]
     }));
@@ -2078,87 +2137,89 @@ function App() {
 
   return (
     <ToastProvider>
-      <AnimatePresence>{loading && <Preloader onComplete={() => setLoading(false)} />}</AnimatePresence>
-      <audio ref={audioRef} src="https://cdn.pixabay.com/audio/2022/10/25/audio_2456e77894.mp3" loop crossOrigin="anonymous" />
-      <div className="w-full h-screen bg-black text-white overflow-hidden select-none" style={{ "--theme-color": currentTheme.hex, "--theme-rgb": currentTheme.rgb } as React.CSSProperties}>
-        <CustomCursor />
-        <LiveTicker isAdmin={user?.role === 'admin'} />
-        <CartSidebar 
-           isOpen={cartOpen} 
-           onClose={() => setCartOpen(false)} 
-           cart={cart} 
-           updateQuantity={updateQuantity} 
-           removeFromCart={removeFromCart} 
-           clearCart={() => setCart([])} 
-           onCheckoutSuccess={() => {}}
-           onOrderComplete={handleOrderComplete}
-        />
-        <AuthModal isOpen={authOpen} onClose={() => setAuthOpen(false)} />
-        <header className="fixed top-0 left-0 w-full p-4 md:p-6 z-50 flex justify-between items-start pointer-events-none">
-          <div><h1 className="text-xl md:text-2xl font-bold font-brand tracking-tighter pointer-events-auto cursor-pointer" onClick={() => setActiveSection('hero')}>CHUMA</h1></div>
-          <div className="flex gap-4 pointer-events-auto items-center">
-            <button onClick={toggleTheme} className="p-2 hover:text-[var(--theme-color)] transition-colors group flex flex-col items-center" title="Toggle Theme">
-                <div className="w-4 h-4 rounded-full border border-current flex items-center justify-center" style={{ backgroundColor: currentTheme.hex }}>
-                    <div className="w-2 h-2 bg-black rounded-full" />
-                </div>
-            </button>
-            <button onClick={() => setCartOpen(true)} className="relative p-2 hover:text-[var(--theme-color)] transition-colors"><ShoppingBag size={20} />{cart.length > 0 && (<span className="absolute top-0 right-0 w-4 h-4 bg-[var(--theme-color)] text-black text-[10px] font-bold rounded-full flex items-center justify-center">{cart.reduce((a,b) => a + b.quantity, 0)}</span>)}</button>
-            {user ? (
-               <div className="flex items-center gap-4 pl-4 border-l border-white/10">
-                 {user.role === 'admin' && (<div className="hidden md:flex items-center gap-2 px-3 py-1 bg-[var(--theme-color)]/10 border border-[var(--theme-color)] rounded-full"><div className="w-2 h-2 bg-[var(--theme-color)] rounded-full animate-pulse" /><span className="text-[10px] font-bold text-[var(--theme-color)]">ADMIN</span></div>)}
-                 <div className="flex items-center gap-2 group relative">
-                    <button onClick={() => setActiveSection('profile')} className="flex items-center gap-2 hover:text-[var(--theme-color)] transition-colors">
-                        <span className="text-xs font-bold uppercase tracking-widest hidden md:block text-gray-300 group-hover:text-[var(--theme-color)]">{user.name}</span>
-                        <div className="w-8 h-8 rounded-full bg-gray-800 border border-white/10 overflow-hidden group-hover:border-[var(--theme-color)] transition-colors">
-                            {user.photoURL ? <img src={user.photoURL} className="w-full h-full object-cover" alt="Profile" /> : <User size={20} className="w-full h-full p-1 text-gray-400" />}
-                        </div>
-                    </button>
-                    <button onClick={handleLogout} className="hover:text-red-500 transition-colors ml-2" title="Logout"><LogOut size={20} /></button>
-                 </div>
-               </div>
-            ) : (<button onClick={() => setAuthOpen(true)} className="ml-2 text-[10px] md:text-xs font-bold tracking-widest text-black bg-[var(--theme-color)] px-3 py-1.5 md:px-5 md:py-2 hover:bg-white transition-colors clip-path-slant flex items-center gap-2" style={{ clipPath: 'polygon(10% 0, 100% 0, 90% 100%, 0% 100%)' }}><LogIn size={14} /> LOGIN <span className="hidden md:inline">/ JOIN</span></button>)}
+      <PayPalScriptProvider options={initialPayPalOptions}>
+          <AnimatePresence>{loading && <Preloader onComplete={() => setLoading(false)} />}</AnimatePresence>
+          <audio ref={audioRef} src="https://cdn.pixabay.com/audio/2022/10/25/audio_2456e77894.mp3" loop crossOrigin="anonymous" />
+          <div className="w-full h-screen bg-black text-white overflow-hidden select-none" style={{ "--theme-color": currentTheme.hex, "--theme-rgb": currentTheme.rgb } as React.CSSProperties}>
+            <CustomCursor />
+            <LiveTicker isAdmin={user?.role === 'admin'} />
+            <CartSidebar 
+               isOpen={cartOpen} 
+               onClose={() => setCartOpen(false)} 
+               cart={cart} 
+               updateQuantity={updateQuantity} 
+               removeFromCart={removeFromCart} 
+               clearCart={() => setCart([])} 
+               onCheckoutSuccess={() => {}}
+               onOrderComplete={handleOrderComplete}
+            />
+            <AuthModal isOpen={authOpen} onClose={() => setAuthOpen(false)} />
+            <header className="fixed top-0 left-0 w-full p-4 md:p-6 z-50 flex justify-between items-start pointer-events-none">
+              <div><h1 className="text-xl md:text-2xl font-bold font-brand tracking-tighter pointer-events-auto cursor-pointer" onClick={() => setActiveSection('hero')}>CHUMA</h1></div>
+              <div className="flex gap-4 pointer-events-auto items-center">
+                <button onClick={toggleTheme} className="p-2 hover:text-[var(--theme-color)] transition-colors group flex flex-col items-center" title="Toggle Theme">
+                    <div className="w-4 h-4 rounded-full border border-current flex items-center justify-center" style={{ backgroundColor: currentTheme.hex }}>
+                        <div className="w-2 h-2 bg-black rounded-full" />
+                    </div>
+                </button>
+                <button onClick={() => setCartOpen(true)} className="relative p-2 hover:text-[var(--theme-color)] transition-colors"><ShoppingBag size={20} />{cart.length > 0 && (<span className="absolute top-0 right-0 w-4 h-4 bg-[var(--theme-color)] text-black text-[10px] font-bold rounded-full flex items-center justify-center">{cart.reduce((a,b) => a + b.quantity, 0)}</span>)}</button>
+                {user ? (
+                   <div className="flex items-center gap-4 pl-4 border-l border-white/10">
+                     {user.role === 'admin' && (<div className="hidden md:flex items-center gap-2 px-3 py-1 bg-[var(--theme-color)]/10 border border-[var(--theme-color)] rounded-full"><div className="w-2 h-2 bg-[var(--theme-color)] rounded-full animate-pulse" /><span className="text-[10px] font-bold text-[var(--theme-color)]">ADMIN</span></div>)}
+                     <div className="flex items-center gap-2 group relative">
+                        <button onClick={() => setActiveSection('profile')} className="flex items-center gap-2 hover:text-[var(--theme-color)] transition-colors">
+                            <span className="text-xs font-bold uppercase tracking-widest hidden md:block text-gray-300 group-hover:text-[var(--theme-color)]">{user.name}</span>
+                            <div className="w-8 h-8 rounded-full bg-gray-800 border border-white/10 overflow-hidden group-hover:border-[var(--theme-color)] transition-colors">
+                                {user.photoURL ? <img src={user.photoURL} className="w-full h-full object-cover" alt="Profile" /> : <User size={20} className="w-full h-full p-1 text-gray-400" />}
+                            </div>
+                        </button>
+                        <button onClick={handleLogout} className="hover:text-red-500 transition-colors ml-2" title="Logout"><LogOut size={20} /></button>
+                     </div>
+                   </div>
+                ) : (<button onClick={() => setAuthOpen(true)} className="ml-2 text-[10px] md:text-xs font-bold tracking-widest text-black bg-[var(--theme-color)] px-3 py-1.5 md:px-5 md:py-2 hover:bg-white transition-colors clip-path-slant flex items-center gap-2" style={{ clipPath: 'polygon(10% 0, 100% 0, 90% 100%, 0% 100%)' }}><LogIn size={14} /> LOGIN <span className="hidden md:inline">/ JOIN</span></button>)}
+              </div>
+            </header>
+            <div className="absolute inset-0 z-0">
+              <Canvas shadows dpr={[1, 2]}>
+                <Suspense fallback={null}>
+                  <PerspectiveCamera makeDefault position={[0, 0, 6]} />
+                  <Environment preset="city" />
+                  <BackgroundScene arMode={arMode} vibe={vibe} partyMode={isPlayingId !== null} matrixMode={matrixMode} weather={weather} themeColor={currentTheme.hex} />
+                  <CameraController section={activeSection} idleMode={false} />
+                  <Center>
+                    {activeSection === 'hero' && (<group><AbstractAvatar activeSection={activeSection} arMode={arMode} vibe={vibe} partyMode={isPlayingId !== null} matrixMode={matrixMode} themeColor={currentTheme.hex} /><Hero3DText vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /><AfroOrbitals vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /><ReactiveFloor vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /></group>)}
+                    {activeSection === 'music' && <VinylRecord isPlaying={isPlayingId !== null} vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} />}
+                    {activeSection === 'events' && <TourGlobe matrixMode={matrixMode} themeColor={currentTheme.hex} />}
+                    {activeSection === 'merch' && (<Float speed={2} rotationIntensity={0.5} floatIntensity={0.5}><mesh position={[0, 0, 0]} rotation={[0.5, 0.5, 0]}><boxGeometry args={[2, 2, 2]} /><meshStandardMaterial color={currentTheme.hex} wireframe={true} /></mesh></Float>)}
+                    {activeSection === 'gallery' && <Gallery3D images={wallImages} themeColor={currentTheme.hex} />}
+                    {activeSection === 'profile' && (<group><AbstractAvatar activeSection={activeSection} arMode={arMode} vibe={vibe} partyMode={isPlayingId !== null} matrixMode={matrixMode} themeColor={currentTheme.hex} /><Hero3DText vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /><AfroOrbitals vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /></group>)}
+                    {activeSection === 'admin' && (
+                        <group>
+                            <SalesChart3D themeColor={currentTheme.hex} active={adminHover === 'revenue'} />
+                            <LiveActivityGlobe themeColor={currentTheme.hex} active={adminHover === 'stats' || adminHover === 'happiness'} />
+                            {adminHover === 'orders' && <AdminFloatingPackages themeColor={currentTheme.hex} />}
+                        </group>
+                    )}
+                  </Center>
+                  <NavHologram hoveredNav={hoveredNav} matrixMode={matrixMode} themeColor={currentTheme.hex} />
+                  <MouseSpotlight themeColor={currentTheme.hex} />
+                  <MouseTrail themeColor={currentTheme.hex} />
+                </Suspense>
+              </Canvas>
+            </div>
+            <AnimatePresence mode="wait">
+              {activeSection === 'hero' && (<motion.div key="hero" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><HeroContent onExplore={() => setActiveSection('music')} onGoToStore={() => setActiveSection('merch')} tracks={tracks} wallImages={wallImages} isAdmin={user?.role === 'admin'} onWallImageAdd={() => {}} onWallImageRemove={(id) => setWallImages(prev => prev.filter(i => i.id !== id))} /></motion.div>)}
+              {activeSection === 'music' && (<motion.div key="music" initial={{ opacity: 0, x: 50 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -50 }} className="absolute inset-0 z-10"><MusicSection tracks={tracks} toggleFavorite={toggleFavorite} favorites={favorites.tracks} isPlayingId={isPlayingId} setIsPlayingId={setIsPlayingId} /></motion.div>)}
+              {activeSection === 'events' && (<motion.div key="events" initial={{ opacity: 0, y: 50 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -50 }} className="absolute inset-0 z-10"><EventsSection tourDates={INITIAL_TOUR_DATES} /></motion.div>)}
+              {activeSection === 'merch' && (<motion.div key="merch" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 1 }} className="absolute inset-0 z-10"><MerchSection merch={merch} addToCart={addToCart} toggleFavorite={toggleFavorite} favorites={favorites.merch} /></motion.div>)}
+              {activeSection === 'gallery' && (<motion.div key="gallery" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><GallerySectionOverlay /></motion.div>)}
+              {activeSection === 'contact' && (<motion.div key="contact" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><ContactSection /></motion.div>)}
+              {activeSection === 'profile' && (<motion.div key="profile" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><ProfileSection user={user} onUpdate={handleUpdateUser} onLogout={handleLogout} /></motion.div>)}
+              {activeSection === 'admin' && (<motion.div key="admin" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><AdminSection user={user} onLogout={handleLogout} tracks={tracks} onAddTrack={handleAddTrack} onRemoveTrack={handleRemoveTrack} merch={merch} onAddMerch={handleAddMerch} onRemoveMerch={handleRemoveMerch} orders={orders} onDeleteOrder={handleDeleteOrder} setHoveredAdminItem={setAdminHover} /></motion.div>)}
+            </AnimatePresence>
+            <Navigation active={activeSection} setActive={setActiveSection} user={user} onHover={setHoveredNav} />
           </div>
-        </header>
-        <div className="absolute inset-0 z-0">
-          <Canvas shadows dpr={[1, 2]}>
-            <Suspense fallback={null}>
-              <PerspectiveCamera makeDefault position={[0, 0, 6]} />
-              <Environment preset="city" />
-              <BackgroundScene arMode={arMode} vibe={vibe} partyMode={isPlayingId !== null} matrixMode={matrixMode} weather={weather} themeColor={currentTheme.hex} />
-              <CameraController section={activeSection} idleMode={false} />
-              <Center>
-                {activeSection === 'hero' && (<group><AbstractAvatar activeSection={activeSection} arMode={arMode} vibe={vibe} partyMode={isPlayingId !== null} matrixMode={matrixMode} themeColor={currentTheme.hex} /><Hero3DText vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /><AfroOrbitals vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /><ReactiveFloor vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /></group>)}
-                {activeSection === 'music' && <VinylRecord isPlaying={isPlayingId !== null} vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} />}
-                {activeSection === 'events' && <TourGlobe matrixMode={matrixMode} themeColor={currentTheme.hex} />}
-                {activeSection === 'merch' && (<Float speed={2} rotationIntensity={0.5} floatIntensity={0.5}><mesh position={[0, 0, 0]} rotation={[0.5, 0.5, 0]}><boxGeometry args={[2, 2, 2]} /><meshStandardMaterial color={currentTheme.hex} wireframe={true} /></mesh></Float>)}
-                {activeSection === 'gallery' && <Gallery3D images={wallImages} themeColor={currentTheme.hex} />}
-                {activeSection === 'profile' && (<group><AbstractAvatar activeSection={activeSection} arMode={arMode} vibe={vibe} partyMode={isPlayingId !== null} matrixMode={matrixMode} themeColor={currentTheme.hex} /><Hero3DText vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /><AfroOrbitals vibe={vibe} matrixMode={matrixMode} themeColor={currentTheme.hex} /></group>)}
-                {activeSection === 'admin' && (
-                    <group>
-                        <SalesChart3D themeColor={currentTheme.hex} active={adminHover === 'revenue'} />
-                        <LiveActivityGlobe themeColor={currentTheme.hex} active={adminHover === 'stats' || adminHover === 'happiness'} />
-                        {adminHover === 'orders' && <AdminFloatingPackages themeColor={currentTheme.hex} />}
-                    </group>
-                )}
-              </Center>
-              <NavHologram hoveredNav={hoveredNav} matrixMode={matrixMode} themeColor={currentTheme.hex} />
-              <MouseSpotlight themeColor={currentTheme.hex} />
-              <MouseTrail themeColor={currentTheme.hex} />
-            </Suspense>
-          </Canvas>
-        </div>
-        <AnimatePresence mode="wait">
-          {activeSection === 'hero' && (<motion.div key="hero" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><HeroContent onExplore={() => setActiveSection('music')} onGoToStore={() => setActiveSection('merch')} tracks={tracks} wallImages={wallImages} isAdmin={user?.role === 'admin'} onWallImageAdd={() => {}} onWallImageRemove={(id) => setWallImages(prev => prev.filter(i => i.id !== id))} /></motion.div>)}
-          {activeSection === 'music' && (<motion.div key="music" initial={{ opacity: 0, x: 50 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -50 }} className="absolute inset-0 z-10"><MusicSection tracks={tracks} toggleFavorite={toggleFavorite} favorites={favorites.tracks} isPlayingId={isPlayingId} setIsPlayingId={setIsPlayingId} /></motion.div>)}
-          {activeSection === 'events' && (<motion.div key="events" initial={{ opacity: 0, y: 50 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -50 }} className="absolute inset-0 z-10"><EventsSection tourDates={INITIAL_TOUR_DATES} /></motion.div>)}
-          {activeSection === 'merch' && (<motion.div key="merch" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 1 }} className="absolute inset-0 z-10"><MerchSection merch={merch} addToCart={addToCart} toggleFavorite={toggleFavorite} favorites={favorites.merch} /></motion.div>)}
-          {activeSection === 'gallery' && (<motion.div key="gallery" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><GallerySectionOverlay /></motion.div>)}
-          {activeSection === 'contact' && (<motion.div key="contact" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><ContactSection /></motion.div>)}
-          {activeSection === 'profile' && (<motion.div key="profile" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><ProfileSection user={user} onUpdate={handleUpdateUser} onLogout={handleLogout} /></motion.div>)}
-          {activeSection === 'admin' && (<motion.div key="admin" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><AdminSection user={user} onLogout={handleLogout} tracks={tracks} onAddTrack={handleAddTrack} onRemoveTrack={handleRemoveTrack} merch={merch} onAddMerch={handleAddMerch} onRemoveMerch={handleRemoveMerch} orders={orders} onDeleteOrder={handleDeleteOrder} setHoveredAdminItem={setAdminHover} /></motion.div>)}
-        </AnimatePresence>
-        <Navigation active={activeSection} setActive={setActiveSection} user={user} onHover={setHoveredNav} />
-      </div>
+      </PayPalScriptProvider>
     </ToastProvider>
   );
 }
