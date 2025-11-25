@@ -69,9 +69,42 @@ import {
   RefreshCcw,
   Image as ImageIcon,
   Edit,
-  Box
+  Box,
+  Upload
 } from 'lucide-react';
 import * as THREE from 'three';
+
+// --- FIREBASE IMPORTS ---
+import { initializeApp } from "firebase/app";
+import { getAnalytics, isSupported } from "firebase/analytics";
+import { 
+  getAuth, 
+  signInWithPopup, 
+  GoogleAuthProvider, 
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+  updateProfile,
+  AuthError
+} from "firebase/auth";
+
+// --- FIREBASE CONFIG ---
+const firebaseConfig = {
+  apiKey: "AIzaSyD4PgzzQnrpqQjRJI8tr-qBLB71b0Flsd4",
+  authDomain: "chuma-7d96c.firebaseapp.com",
+  databaseURL: "https://chuma-7d96c-default-rtdb.firebaseio.com",
+  projectId: "chuma-7d96c",
+  storageBucket: "chuma-7d96c.firebasestorage.app",
+  messagingSenderId: "585665952166",
+  appId: "1:585665952166:web:fdf7801211322b12ffb767",
+  measurementId: "G-7Y2TLM5VBM"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const analyticsPromise = isSupported().then(yes => yes ? getAnalytics(app) : null);
 
 // --- CONSTANTS & DATA ---
 
@@ -1192,25 +1225,76 @@ const VideoModal = ({ isOpen, onClose }) => {
   );
 };
 
-const AuthModal = ({ isOpen, onClose, onLogin }) => {
+const AuthModal = ({ isOpen, onClose }) => {
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [name, setName] = useState('');
+  const [error, setError] = useState('');
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const { showToast } = useToast();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      setPhotoFile(file);
+      setPhotoPreview(URL.createObjectURL(file));
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+      showToast("SIGNED IN WITH GOOGLE");
+      onClose();
+    } catch (e: any) {
+      console.error(e);
+      if (e.code === 'auth/unauthorized-domain') {
+        setError("This domain is not authorized for Google Sign In. Please add it in Firebase Console.");
+      } else {
+        setError("Failed to sign in with Google.");
+      }
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setTimeout(() => {
-        const isAdmin = email.includes('admin') || email === 'chuma@official.com';
-        const userData = {
-            name: mode === 'register' ? name : (isAdmin ? 'Antony Muuo' : 'Fan'),
-            role: isAdmin ? 'admin' : 'user',
-            email
-        };
-        onLogin(userData);
-        showToast(isAdmin ? "WELCOME BACK, BOSS" : `WELCOME TO THE TRIBE, ${userData.name.toUpperCase()}`);
-    }, 800);
+    setError('');
+
+    if (mode === 'register') {
+       if (password !== confirmPassword) {
+         setError("Passwords do not match");
+         return;
+       }
+       try {
+         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+         // Note: Actual file upload to storage is skipped as per requirements ("don't save user info").
+         // We update profile with name.
+         await updateProfile(userCredential.user, { displayName: name });
+         showToast(`WELCOME TO THE TRIBE, ${name.toUpperCase()}`);
+         onClose();
+       } catch (error: any) {
+         if (error.code === 'auth/email-already-in-use') {
+           setError("User already exists. Sign in?");
+         } else {
+           console.error(error);
+           setError("Registration failed. Try again.");
+         }
+       }
+    } else {
+       try {
+         await signInWithEmailAndPassword(auth, email, password);
+         showToast("WELCOME BACK");
+         onClose();
+       } catch (error: any) {
+         console.error("Login Error:", error.code);
+         // Display specific message as requested for any login failure
+         setError("Password or Email Incorrect");
+       }
+    }
   };
 
   return (
@@ -1225,12 +1309,42 @@ const AuthModal = ({ isOpen, onClose, onLogin }) => {
                     <h2 className="text-3xl font-brand font-bold text-white tracking-wider mb-2">{mode === 'login' ? 'WELCOME BACK' : 'JOIN THE TRIBE'}</h2>
                     <p className="text-xs text-gray-400 tracking-widest uppercase">{mode === 'login' ? 'ACCESS YOUR DASHBOARD' : 'UNLOCK EXCLUSIVE CONTENT'}</p>
                 </div>
+
+                {error && (
+                    <div className="mb-4 p-3 bg-red-900/30 border border-red-500/50 rounded flex items-center gap-2 text-red-200 text-xs">
+                        <AlertTriangle size={14} className="text-red-500" />
+                        {error}
+                        {error === "User already exists. Sign in?" && (
+                            <button onClick={() => { setMode('login'); setError(''); }} className="ml-auto underline font-bold">Sign In</button>
+                        )}
+                    </div>
+                )}
+
                 <form className="space-y-4" onSubmit={handleSubmit}>
                     {mode === 'register' && (
-                        <div className="relative group">
-                            <User className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 group-focus-within:text-[var(--theme-color)]" size={16} />
-                            <input placeholder="NAME" value={name} onChange={(e) => setName(e.target.value)} required className="w-full bg-black/50 border border-white/10 rounded p-3 pl-10 text-sm focus:border-[var(--theme-color)] outline-none text-white transition-colors placeholder:text-gray-600 font-mono" />
-                        </div>
+                        <>
+                            <div className="flex items-center gap-4 mb-2">
+                                <label className="w-16 h-16 rounded-full bg-white/5 border border-white/10 flex items-center justify-center cursor-pointer hover:border-[var(--theme-color)] transition-colors relative overflow-hidden group">
+                                    <input type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
+                                    {photoPreview ? (
+                                      <img src={photoPreview} className="w-full h-full object-cover" alt="Preview" />
+                                    ) : (
+                                      <User size={24} className="text-gray-500 group-hover:text-[var(--theme-color)]" />
+                                    )}
+                                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <Plus size={16} className="text-white" />
+                                    </div>
+                                </label>
+                                <div className="flex-1">
+                                    <p className="text-xs font-bold text-gray-400 mb-1 uppercase">Profile Photo</p>
+                                    <p className="text-[10px] text-gray-600">Upload a picture to represent your vibe.</p>
+                                </div>
+                            </div>
+                            <div className="relative group">
+                                <User className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 group-focus-within:text-[var(--theme-color)]" size={16} />
+                                <input placeholder="NAME" value={name} onChange={(e) => setName(e.target.value)} required className="w-full bg-black/50 border border-white/10 rounded p-3 pl-10 text-sm focus:border-[var(--theme-color)] outline-none text-white transition-colors placeholder:text-gray-600 font-mono" />
+                            </div>
+                        </>
                     )}
                     <div className="relative group">
                         <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 group-focus-within:text-[var(--theme-color)]" size={16} />
@@ -1240,13 +1354,28 @@ const AuthModal = ({ isOpen, onClose, onLogin }) => {
                         <Shield className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 group-focus-within:text-[var(--theme-color)]" size={16} />
                         <input placeholder="PASSWORD" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required className="w-full bg-black/50 border border-white/10 rounded p-3 pl-10 text-sm focus:border-[var(--theme-color)] outline-none text-white transition-colors placeholder:text-gray-600 font-mono" />
                     </div>
+                    {mode === 'register' && (
+                        <div className="relative group">
+                            <Shield className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 group-focus-within:text-[var(--theme-color)]" size={16} />
+                            <input placeholder="REPEAT PASSWORD" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required className="w-full bg-black/50 border border-white/10 rounded p-3 pl-10 text-sm focus:border-[var(--theme-color)] outline-none text-white transition-colors placeholder:text-gray-600 font-mono" />
+                        </div>
+                    )}
                     <button type="submit" className="w-full py-3 bg-[var(--theme-color)] text-black font-bold font-brand tracking-widest hover:bg-white transition-colors mt-6 clip-path-slant" style={{ clipPath: 'polygon(5% 0, 100% 0, 95% 100%, 0% 100%)' }}>{mode === 'login' ? 'ENTER' : 'REGISTER'}</button>
                 </form>
-                <div className="mt-8 text-center border-t border-white/5 pt-4">
-                    <button onClick={() => setMode(mode === 'login' ? 'register' : 'login')} className="text-xs text-gray-400 hover:text-[var(--theme-color)] tracking-widest transition-colors">{mode === 'login' ? "NEW HERE? CREATE ACCOUNT" : "ALREADY HAVE AN ACCOUNT? LOGIN"}</button>
+
+                <div className="my-6 flex items-center justify-between gap-4">
+                    <div className="h-px bg-white/10 flex-1"></div>
+                    <span className="text-[10px] text-gray-500 font-mono">OR CONTINUE WITH</span>
+                    <div className="h-px bg-white/10 flex-1"></div>
                 </div>
-                <div className="absolute bottom-1 left-0 w-full text-center opacity-20 hover:opacity-100 transition-opacity">
-                    <span className="text-[8px] text-gray-500 cursor-help" title="Use an email with 'admin' to test the dashboard">Test Hint: use 'admin' in email for dashboard</span>
+
+                <button onClick={handleGoogleLogin} className="w-full py-3 bg-white/5 border border-white/10 text-white text-xs font-bold font-brand tracking-widest hover:bg-white/10 transition-colors flex items-center justify-center gap-2 rounded">
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+                    GOOGLE
+                </button>
+
+                <div className="mt-8 text-center border-t border-white/5 pt-4">
+                    <button onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }} className="text-xs text-gray-400 hover:text-[var(--theme-color)] tracking-widest transition-colors">{mode === 'login' ? "NEW HERE? CREATE ACCOUNT" : "ALREADY HAVE AN ACCOUNT? LOGIN"}</button>
                 </div>
             </motion.div>
         </motion.div>
@@ -1290,7 +1419,7 @@ const AccountModal = ({ isOpen, onClose, user, onUpdate }) => {
                         </div>
                         <div>
                             <label className="text-xs text-gray-500 mb-1 block">EMAIL ADDRESS</label>
-                            <input value={email} onChange={e => setEmail(e.target.value)} className="w-full bg-black/50 border border-white/10 rounded p-3 text-sm text-white focus:border-[var(--theme-color)] outline-none" />
+                            <input value={email} onChange={e => setEmail(e.target.value)} disabled className="w-full bg-black/50 border border-white/10 rounded p-3 text-sm text-gray-500 focus:border-[var(--theme-color)] outline-none cursor-not-allowed" />
                         </div>
                         <button type="submit" className="w-full py-3 bg-[var(--theme-color)] text-black font-bold font-brand tracking-widest hover:bg-white transition-colors mt-6">SAVE CHANGES</button>
                     </form>
@@ -1663,7 +1792,7 @@ const AdminSection = ({ user, onLogout, tracks, onAddTrack, onRemoveTrack, merch
            <button onClick={() => showToast("NOTIFICATIONS CLEARED")} className="p-2 text-gray-400 hover:text-white relative"><Bell size={18} /><span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span></button>
            <div className="h-8 w-px bg-white/10 mx-2"></div>
            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-purple-500 to-blue-500 p-[1px]"><img src="https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=1000&auto=format&fit=crop" className="w-full h-full rounded-full object-cover" alt="Profile" /></div>
+              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-purple-500 to-blue-500 p-[1px]"><img src={user?.photoURL || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=1000&auto=format&fit=crop"} className="w-full h-full rounded-full object-cover" alt="Profile" /></div>
               <div className="hidden md:block"><p className="text-sm font-bold text-white leading-none">{user?.name}</p><p className="text-[10px] text-gray-400">Admin</p></div>
               <button onClick={onLogout} className="text-red-500 hover:text-red-400 ml-2" title="Logout"><LogOut size={16} /></button>
            </div>
@@ -1815,6 +1944,24 @@ function App() {
   };
 
   useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+        if (currentUser) {
+            const isAdmin = currentUser.email?.includes('admin') || currentUser.email === 'chuma@official.com';
+            setUser({
+                name: currentUser.displayName || "User",
+                email: currentUser.email,
+                role: isAdmin ? 'admin' : 'user',
+                uid: currentUser.uid,
+                photoURL: currentUser.photoURL
+            });
+        } else {
+            setUser(null);
+        }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
     // Updated developer shortcut name
     const handleKey = (e) => { if (e.ctrlKey && e.key === 'm') setUser(prev => prev ? null : { name: 'Antony Muuo', role: 'admin' }); };
     window.addEventListener('keydown', handleKey);
@@ -1833,8 +1980,16 @@ function App() {
     }
   }, [isPlayingId]);
 
-  const handleLogin = (userData) => { setUser(userData); setAuthOpen(false); };
-  const handleUpdateUser = (updatedUser) => { setUser(updatedUser); };
+  const handleUpdateUser = async (updatedUser) => { 
+      try {
+          if (auth.currentUser) {
+              await updateProfile(auth.currentUser, { displayName: updatedUser.name });
+              setUser(prev => ({...prev, name: updatedUser.name}));
+          }
+      } catch (e) {
+          console.error("Failed to update profile", e);
+      }
+  };
   const addToCart = (item) => { setCart(prev => { const exist = prev.find(i => i.id === item.id); if (exist) return prev.map(i => i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i); return [...prev, { ...item, quantity: 1 }]; }); setCartOpen(true); };
   const removeFromCart = (id) => setCart(prev => prev.filter(i => i.id !== id));
   const updateQuantity = (id, delta) => { setCart(prev => prev.map(item => { if (item.id === id) { const newQ = item.quantity + delta; return newQ > 0 ? { ...item, quantity: newQ } : item; } return item; })); };
@@ -1865,6 +2020,16 @@ function App() {
   const handleDeleteOrder = (id) => {
     setOrders(prev => prev.filter(o => o.id !== id));
   };
+  
+  const handleLogout = async () => {
+      try {
+          await signOut(auth);
+          setUser(null);
+          setActiveSection('hero');
+      } catch (e) {
+          console.error(e);
+      }
+  };
 
   return (
     <ToastProvider>
@@ -1883,7 +2048,7 @@ function App() {
            onCheckoutSuccess={() => {}}
            onOrderComplete={handleOrderComplete}
         />
-        <AuthModal isOpen={authOpen} onClose={() => setAuthOpen(false)} onLogin={handleLogin} />
+        <AuthModal isOpen={authOpen} onClose={() => setAuthOpen(false)} />
         <AccountModal isOpen={accountOpen} onClose={() => setAccountOpen(false)} user={user} onUpdate={handleUpdateUser} />
         <header className="fixed top-0 left-0 w-full p-4 md:p-6 z-50 flex justify-between items-start pointer-events-none">
           <div><h1 className="text-xl md:text-2xl font-bold font-brand tracking-tighter pointer-events-auto cursor-pointer" onClick={() => setActiveSection('hero')}>CHUMA</h1></div>
@@ -1902,7 +2067,7 @@ function App() {
                         <span className="text-xs font-bold uppercase tracking-widest hidden md:block text-gray-300 group-hover:text-[var(--theme-color)]">{user.name}</span>
                         <Edit size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" />
                     </button>
-                    <button onClick={() => { setUser(null); setActiveSection('hero'); }} className="hover:text-red-500 transition-colors ml-2" title="Logout"><LogOut size={20} /></button>
+                    <button onClick={handleLogout} className="hover:text-red-500 transition-colors ml-2" title="Logout"><LogOut size={20} /></button>
                  </div>
                </div>
             ) : (<button onClick={() => setAuthOpen(true)} className="ml-2 text-[10px] md:text-xs font-bold tracking-widest text-black bg-[var(--theme-color)] px-3 py-1.5 md:px-5 md:py-2 hover:bg-white transition-colors clip-path-slant flex items-center gap-2" style={{ clipPath: 'polygon(10% 0, 100% 0, 90% 100%, 0% 100%)' }}><LogIn size={14} /> LOGIN <span className="hidden md:inline">/ JOIN</span></button>)}
@@ -1942,7 +2107,7 @@ function App() {
           {activeSection === 'merch' && (<motion.div key="merch" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 1 }} className="absolute inset-0 z-10"><MerchSection merch={merch} addToCart={addToCart} toggleFavorite={toggleFavorite} favorites={favorites.merch} /></motion.div>)}
           {activeSection === 'gallery' && (<motion.div key="gallery" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><GallerySectionOverlay /></motion.div>)}
           {activeSection === 'contact' && (<motion.div key="contact" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><ContactSection /></motion.div>)}
-          {activeSection === 'admin' && (<motion.div key="admin" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><AdminSection user={user} onLogout={() => { setUser(null); setActiveSection('hero'); }} tracks={tracks} onAddTrack={handleAddTrack} onRemoveTrack={handleRemoveTrack} merch={merch} onAddMerch={handleAddMerch} onRemoveMerch={handleRemoveMerch} orders={orders} onDeleteOrder={handleDeleteOrder} setHoveredAdminItem={setAdminHover} /></motion.div>)}
+          {activeSection === 'admin' && (<motion.div key="admin" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-10"><AdminSection user={user} onLogout={handleLogout} tracks={tracks} onAddTrack={handleAddTrack} onRemoveTrack={handleRemoveTrack} merch={merch} onAddMerch={handleAddMerch} onRemoveMerch={handleRemoveMerch} orders={orders} onDeleteOrder={handleDeleteOrder} setHoveredAdminItem={setAdminHover} /></motion.div>)}
         </AnimatePresence>
         <Navigation active={activeSection} setActive={setActiveSection} user={user} onHover={setHoveredNav} />
       </div>
